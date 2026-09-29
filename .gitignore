@@ -9,3 +9,13 @@ node_modules/
 app/static/vendor/
 test-results/
 .env.example
+
+# Offline squat experiment: source footage and generated artifacts stay local.
+.venv-ml/
+ml/data/clips/
+ml/data/*.npz
+ml/data/downloads/
+ml/models/
+ml/**/*.pt
+ml/**/*.pth
+ml/**/*.task
