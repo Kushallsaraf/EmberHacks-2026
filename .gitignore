@@ -10,7 +10,7 @@ app/static/vendor/
 test-results/
 .env.example
 
-# Offline squat experiment: source footage and generated artifacts stay local.
+# ML data and checkpoints
 .venv-ml/
 ml/data/clips/
 ml/data/*.npz

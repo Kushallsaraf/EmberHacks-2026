@@ -1,4 +1,4 @@
-"""Extract real, documented video clips with MediaPipe's pinned legacy Pose API."""
+"""Extract pose features and rule predictions from labeled video clips."""
 from __future__ import annotations
 
 import argparse
@@ -18,7 +18,7 @@ VIDEO_SUFFIXES = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 
 
 def sha256(path: Path) -> str:
-    """Hash without loading large video files into memory."""
+    """SHA-256 of a file, read in 1 MiB blocks."""
     h = hashlib.sha256()
     with path.open("rb") as stream:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
@@ -27,7 +27,7 @@ def sha256(path: Path) -> str:
 
 
 def read_manifest(path: Path) -> dict[str, dict[str, str]]:
-    """Require traceable labels and subject grouping for public or personal data."""
+    """Index provenance rows by clip path; reject missing fields and duplicates."""
     if not path.exists():
         raise ValueError(f"Missing {path}. Copy ml/data/manifest.example.csv and document each real clip.")
     with path.open(newline="") as stream:
@@ -85,7 +85,7 @@ def extract_clip(path: Path, frames: int) -> tuple[np.ndarray, int, dict]:
 
 
 def run(clips: Path, manifest: Path, output: Path, frames: int = 32) -> None:
-    """Write an archive only after successful extraction from actual video files."""
+    """Save features, labels, provenance and skip reasons to a compressed archive."""
     files = [(p, label) for folder, label in (("good", 0), ("bad", 1))
              for p in sorted((clips / folder).glob("*")) if p.suffix.lower() in VIDEO_SUFFIXES]
     if not files:

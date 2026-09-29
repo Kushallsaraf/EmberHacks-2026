@@ -1,4 +1,4 @@
-"""Python port of the active browser squat tracker; no invented form thresholds.
+"""One-repetition port of the browser squat tracker.
 
 Source: app/static/js/movement.js at ad5176d, lines 7-19, 36-45, 50-66,
 143-402; framing: app/static/js/calibration.js lines 37-79.
@@ -14,7 +14,7 @@ from ml.features import JOINTS
 
 
 class SquatRules:
-    """One-repetition translation of MovementTracker, retaining timing/calibration."""
+    """Stateful squat assessment using world coordinates and frame timestamps."""
 
     def __init__(self) -> None:
         self.last_time: float | None = None

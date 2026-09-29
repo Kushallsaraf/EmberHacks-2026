@@ -5,10 +5,9 @@ MLP with Spotter's existing browser squat rules. It is separate from Flask and t
 browser application. Label **0 = good**, **1 = bad**. There are no trained models,
 experiment metrics, or video clips in this repository yet.
 
-The original brief required personally recorded videos. The project owner revised
-that requirement to allow free, licensed public footage. Real videos and documented
-labels are still required. Synthetic arrays occur only in `tests/ml/`; they never
-serve as research data or produce the committed results listed below.
+Data may come from licensed public footage or personal recordings. Each clip needs
+a documented source and label. Synthetic arrays in `tests/ml/` are test fixtures
+and are excluded from experiment results.
 
 ## Free data without recording yourself
 
@@ -23,7 +22,8 @@ the license and download. No paid API, account subscription, or cloud GPU is nee
 This is a candidate source, not an already evaluated dataset: footage has not been
 downloaded, inspected, segmented, or run through this experiment. The record does
 not establish that every file contains exactly one repetition or that every bad
-label means one of the three errors in this brief. Review those before use.
+label identifies shallow depth, inward knee movement, or excessive forward lean.
+Review those before use.
 
 Preparation:
 
@@ -51,7 +51,7 @@ Preparation:
 | `license` | Original reuse license, e.g. `CC BY 4.0`; for your clips, `owned` |
 | `label_source` | Provider label/annotation reference, or reviewer and decision; include source filename and trim interval |
 
-The manifest template intentionally contains **no invented video or label rows**.
+The manifest template contains column headers only.
 Keep attribution and record your trimming/relabeling changes when sharing results.
 Do not put names, contact information, or private signed download URLs in a tracked
 manifest. The extractor checks completeness and byte-identical duplicates, not
@@ -90,8 +90,7 @@ Create a separate environment:
 python3.11 -m venv .venv-ml
 ```
 
-Install the pinned experiment dependencies (downloads free packages; does not
-train anything or use a paid service):
+Install the pinned experiment dependencies:
 
 ```bash
 .venv-ml/bin/python -m pip install -r requirements-ml.txt
@@ -235,7 +234,7 @@ accuracy is not a significance test. Full-data inference checkpoints are not use
 to calculate reported CV scores. Checkpoints, video, and archives are ignored; the
 three small result files remain trackable, and are created only by a successful run.
 
-## Limitations and portfolio claims
+## Limitations
 
 Small samples, uncertain labels, one recorder or few subjects, camera/view imbalance,
 correlated repetitions, and source-domain differences all limit generalization.
@@ -243,7 +242,5 @@ Clip stratification cannot fix subject leakage. A single frame angle is not a
 clinical form assessment; the baseline itself is a demo heuristic. No clinical,
 injury-prevention, or universal coaching claim is supported.
 
-Without real prepared footage, describe this as an **implemented and tested PyTorch
-experiment pipeline awaiting evaluation**, not a trained high-accuracy classifier.
-Public data is a legitimate portfolio choice when attribution, labeling decisions,
-split design, and actual results are transparent. All commands run locally for free.
+Real-video evaluation is pending. Test-suite results verify implementation behavior,
+not squat-form classification accuracy.

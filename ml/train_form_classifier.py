@@ -24,7 +24,7 @@ LOG = logging.getLogger(__name__)
 
 
 def seed_everything(seed: int) -> None:
-    """Deterministic CPU execution in a pinned environment."""
+    """Seed all RNGs and enable deterministic, single-threaded Torch execution."""
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -52,7 +52,7 @@ class FormDataset(Dataset):
 
 
 class CNN(nn.Module):
-    """Two temporal convolutions, global pooling, dropout and two logits."""
+    """Accept (batch, 6, time); return two class logits per sequence."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -65,7 +65,7 @@ class CNN(nn.Module):
 
 
 class MLP(nn.Module):
-    """A small classifier over 24 independently standardized summary features."""
+    """Accept (batch, 24) summary features; return two class logits."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -83,7 +83,7 @@ def normalize_fit(x: np.ndarray, method: str) -> tuple[np.ndarray, np.ndarray]:
 
 
 def fit(x: np.ndarray, y: np.ndarray, method: str, seed: int, epochs: int = 60) -> tuple[nn.Module, np.ndarray, np.ndarray, list[float]]:
-    """Fit a fixed-epoch model without looking at a validation/test fold."""
+    """Return the fitted model, training mean/std and per-epoch losses."""
     seed_everything(seed)
     data = x if method == "cnn" else summary_features(x)
     mean, std = normalize_fit(data, method)
@@ -212,7 +212,7 @@ def evaluate(data: dict, seeds: list[int], epochs: int, split: str) -> dict:
 
 
 def write_results(report: dict, folder: Path) -> None:
-    """Produce artifacts only from completed real-data evaluation."""
+    """Write metrics JSON, a Markdown table and pooled confusion matrices."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt

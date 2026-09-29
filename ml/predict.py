@@ -1,4 +1,4 @@
-"""Standalone inference; no connection to the Flask application."""
+"""Predict squat form from a saved checkpoint and landmark sequence."""
 from __future__ import annotations
 
 import argparse
