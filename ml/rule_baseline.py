@@ -1,4 +1,4 @@
-"""One-repetition port of the browser squat tracker.
+"""Port of the browser squat tracker, one repetition or a continuous set.
 
 Source: app/static/js/movement.js at ad5176d, lines 7-19, 36-45, 50-66,
 143-402; framing: app/static/js/calibration.js lines 37-79.
@@ -16,11 +16,17 @@ from ml.features import JOINTS
 class SquatRules:
     """Stateful squat assessment using world coordinates and frame timestamps."""
 
-    def __init__(self) -> None:
+    def __init__(self, target_reps: int = 1) -> None:
+        self.target_reps = target_reps
         self.last_time: float | None = None
         self.standing: np.ndarray | None = None
-        self.result: dict | None = None
+        self.reps: list[dict] = []
         self.reset()
+
+    @property
+    def result(self) -> dict | None:
+        """First completed rep's label and faults, as the one-rep oracle reports."""
+        return None if not self.reps else {"label": self.reps[0]["label"], "faults": self.reps[0]["faults"]}
 
     def reset(self) -> None:
         self.phase = "start"
@@ -66,7 +72,7 @@ class SquatRules:
             angles.append(math.acos(max(-1., min(1., cosine))) * 180 / math.pi)
         a = np.asarray(angles)
         flexion, extension = float(a.max()), float(a.min())
-        if self.result is not None:
+        if len(self.reps) >= self.target_reps:
             return self.result
         if not self.armed:
             if extension < 145:
@@ -127,6 +133,12 @@ class SquatRules:
                     faults.append("uneven_range")
                 if duration < 1400:
                     faults.append("fast_cadence")
-                self.result = {"label": int(bool(faults)), "faults": faults}
-                return self.result
+                completed = {"label": int(bool(faults)), "faults": faults,
+                             "start_ms": rep["start"], "end_ms": time_ms}
+                self.reps.append(completed)
+                # As in the app, completion is a sustained start pose: stay
+                # armed with the same calibration so the next rep may depart.
+                self.reset()
+                self.armed = True
+                return completed
         return None

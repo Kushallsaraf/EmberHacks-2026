@@ -83,6 +83,26 @@ def test_evaluation_pools_each_clip_once_per_seed_without_writing_results(tmp_pa
     assert not list(tmp_path.iterdir())
 
 
+def test_all_cohort_scores_rules_only_where_they_answer(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    y = np.arange(6) % 2
+    baseline = np.array([0, 1, -1, -1, 0, 0])
+    data = {"X": np.random.default_rng(0).normal(size=(6, 8, 6)), "y": y,
+            "groups": np.array(["a", "a", "b", "b", "c", "c"]),
+            "clip_names": np.array([f"TEST-ONLY-{i}" for i in range(6)]), "baseline": baseline}
+    report = evaluate(data, [17], epochs=1, split="subject")
+    rules = report["methods"]["rules"]
+    assert rules["coverage"] == pytest.approx(4 / 6)
+    assert rules["accuracy"]["mean"] == pytest.approx(3 / 4)
+    assert np.asarray(rules["pooled_confusion_matrix"]).sum() == 4
+    for method in ("cnn", "mlp"):
+        result = report["methods"][method]
+        assert result["coverage"] == 1 and np.asarray(result["pooled_confusion_matrix"]).sum() == 6
+        prediction = np.asarray(result["predictions"][0])
+        mask = baseline >= 0
+        assert result["on_rules_assessable"]["accuracy"]["mean"] == pytest.approx((prediction[mask] == y[mask]).mean())
+    assert not list(tmp_path.iterdir())
+
 def test_predict_roundtrip(tmp_path):
     path = tmp_path / "test-only.pt"
     torch.save({"state_dict": CNN().state_dict(), "method": "cnn", "mean": torch.zeros(6),

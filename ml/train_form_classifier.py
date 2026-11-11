@@ -151,8 +151,8 @@ def metrics(y: np.ndarray, prediction: np.ndarray) -> dict:
             "confusion_matrix": confusion_matrix(y, prediction, labels=[0, 1]).tolist()}
 
 
-def load_data(path: Path) -> dict:
-    """Validate the extraction archive and keep only the common assessable cohort."""
+def load_data(path: Path, cohort: str = "common") -> dict:
+    """Validate the extraction archive; "common" keeps only rule-assessable clips."""
     if not path.exists():
         raise ValueError(f"Missing {path}. Add real clips and run python -m ml.extract_features first.")
     with np.load(path, allow_pickle=False) as archive:
@@ -176,6 +176,8 @@ def load_data(path: Path) -> dict:
     mask = data["baseline"] >= 0
     data["excluded"] = data["clip_names"][~mask].tolist()
     data["original_counts"] = np.bincount(y, minlength=2).tolist()
+    if cohort == "all":
+        return data
     for key in ("X", "y", "baseline", "groups", "clip_names"):
         data[key] = data[key][mask]
     if not mask.any():
@@ -184,8 +186,14 @@ def load_data(path: Path) -> dict:
 
 
 def evaluate(data: dict, seeds: list[int], epochs: int, split: str) -> dict:
-    """Identical held-out clips for all methods, one prediction per clip per seed."""
+    """Identical held-out clips for all methods, one prediction per clip per seed.
+
+    Rules are scored only where they completed a rep; when that is a subset, the
+    models are also scored on it ("on_rules_assessable") for a like-for-like view.
+    """
     x, y, groups = data["X"], data["y"], data["groups"]
+    assessable = data["baseline"] >= 0
+    subset = not assessable.all()
     fold_sets = [make_folds(y, groups, seed, split) for seed in seeds]
     output: dict = {name: {"per_seed": [], "predictions": []} for name in ("cnn", "mlp", "rules")}
     splits = []
@@ -199,15 +207,25 @@ def evaluate(data: dict, seeds: list[int], epochs: int, split: str) -> dict:
                 model, mean, std, _ = fit(x[train], y[train], method, seed + fold, epochs)
                 predictions[method][test] = probabilities(model, x[test], mean, std, method).argmax(1)
         for method, prediction in predictions.items():
-            if np.any(prediction < 0):
+            scored = assessable if method == "rules" else np.ones(len(y), dtype=bool)
+            if np.any(prediction[scored] < 0):
                 raise RuntimeError("Missing held-out predictions.")
-            output[method]["per_seed"].append({"seed": seed, **metrics(y, prediction)})
+            output[method]["per_seed"].append({"seed": seed, **metrics(y[scored], prediction[scored])})
             output[method]["predictions"].append(prediction.tolist())
+            if subset and method != "rules":
+                output[method].setdefault("per_seed_on_rules_assessable", []).append(
+                    {"seed": seed, **metrics(y[assessable], prediction[assessable])})
     for method, item in output.items():
+        scored = assessable if method == "rules" else np.ones(len(y), dtype=bool)
+        item["coverage"] = float(scored.mean())
         for metric in ("accuracy", "precision_bad", "recall_bad", "f1_bad"):
             values = [row[metric] for row in item["per_seed"]]
             item[metric] = {"mean": float(np.mean(values)), "std": float(np.std(values))}
-        item["pooled_confusion_matrix"] = confusion_matrix(np.tile(y, len(seeds)), np.asarray(item["predictions"]).ravel(), labels=[0, 1]).tolist()
+            if "per_seed_on_rules_assessable" in item:
+                values = [row[metric] for row in item["per_seed_on_rules_assessable"]]
+                item.setdefault("on_rules_assessable", {})[metric] = {"mean": float(np.mean(values)), "std": float(np.std(values))}
+        predicted = np.asarray(item["predictions"])[:, scored].ravel()
+        item["pooled_confusion_matrix"] = confusion_matrix(np.tile(y[scored], len(seeds)), predicted, labels=[0, 1]).tolist()
     return {"methods": output, "folds": splits}
 
 
@@ -220,12 +238,12 @@ def write_results(report: dict, folder: Path) -> None:
     folder.mkdir(parents=True, exist_ok=True)
     (folder / "results.json").write_text(json.dumps(report, indent=2) + "\n")
     lines = ["# Squat-form experiment", "", report["conclusion"], "",
-             "| Method | Accuracy mean ± SD | Bad precision | Bad recall | Bad F1 |",
-             "|---|---:|---:|---:|---:|"]
+             "| Method | Coverage | Accuracy mean ± SD | Bad precision | Bad recall | Bad F1 |",
+             "|---|---:|---:|---:|---:|---:|"]
     fig, axes = plt.subplots(1, 3, figsize=(10, 3.5))
     for ax, (method, result) in zip(axes, report["methods"].items()):
         acc = result["accuracy"]
-        lines.append(f"| {method} | {acc['mean']:.3f} ± {acc['std']:.3f} | {result['precision_bad']['mean']:.3f} | {result['recall_bad']['mean']:.3f} | {result['f1_bad']['mean']:.3f} |")
+        lines.append(f"| {method} | {result['coverage']:.1%} | {acc['mean']:.3f} ± {acc['std']:.3f} | {result['precision_bad']['mean']:.3f} | {result['recall_bad']['mean']:.3f} | {result['f1_bad']['mean']:.3f} |")
         matrix = np.asarray(result["pooled_confusion_matrix"])
         ax.imshow(matrix, cmap="Blues", vmin=0)
         for (row, col), value in np.ndenumerate(matrix):
@@ -235,9 +253,19 @@ def write_results(report: dict, folder: Path) -> None:
     fig.tight_layout()
     fig.savefig(folder / "confusion_matrix.png", dpi=160)
     plt.close(fig)
-    lines += ["", f"Split: {report['split']}. Evaluated clips by class: {report['class_counts']}.",
-              f"Rule-unavailable clips excluded from ALL methods: {len(report['excluded_rule_unavailable'])}.",
-              "This common-cohort comparison can favor the rules by excluding difficult/incomplete reps.",
+    if report.get("cohort") == "all":
+        lines += ["", "Same predictions, scored only on clips where the rules completed a rep:", "",
+                  "| Method | Accuracy mean ± SD | Bad precision | Bad recall | Bad F1 |", "|---|---:|---:|---:|---:|"]
+        for method, result in report["methods"].items():
+            sub = result.get("on_rules_assessable", result)
+            lines.append(f"| {method} | {sub['accuracy']['mean']:.3f} ± {sub['accuracy']['std']:.3f} | {sub['precision_bad']['mean']:.3f} | {sub['recall_bad']['mean']:.3f} | {sub['f1_bad']['mean']:.3f} |")
+        cohort_note = [f"Cohort: all clips with features; rules abstain on {len(report['excluded_rule_unavailable'])} "
+                       "(no completed rep) and are scored only where they answer.",
+                       "Models and rules are scored on different clip sets in the first table; use the second to compare them."]
+    else:
+        cohort_note = [f"Rule-unavailable clips excluded from ALL methods: {len(report['excluded_rule_unavailable'])}.",
+                       "This common-cohort comparison can favor the rules by excluding difficult/incomplete reps."]
+    lines += ["", f"Split: {report['split']}. Evaluated clips by class: {report['class_counts']}.", *cohort_note,
               "Pooled matrices repeat each clip once per seed; these are not independent observations.",
               "SD is population SD across seeds, not a confidence interval. No generalization claim."]
     (folder / "results.md").write_text("\n".join(lines) + "\n")
@@ -251,12 +279,14 @@ def main() -> None:
     parser.add_argument("--seeds", nargs="+", type=int, default=[17, 42, 123])
     parser.add_argument("--epochs", type=int, default=60)
     parser.add_argument("--split", choices=["subject", "clip"], default="subject")
+    parser.add_argument("--cohort", choices=["common", "all"], default="common",
+                        help="common: only clips the rules assess; all: every clip, rules scored where they answer.")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     try:
         if args.epochs < 1 or len(set(args.seeds)) != len(args.seeds) or any(s < 0 or s >= 2**32 - 100000 for s in args.seeds):
             raise ValueError("Use positive epochs and distinct nonnegative seeds below 2**32-100000.")
-        data = load_data(args.features)
+        data = load_data(args.features, args.cohort)
         LOG.info("Class counts good/bad=%s; excluded rule-unavailable=%d", np.bincount(data["y"], minlength=2), len(data["excluded"]))
         if args.split == "clip":
             LOG.warning("Clip splitting can leak subject identity; results do not measure unseen-person generalization.")
@@ -266,10 +296,12 @@ def main() -> None:
             dirty = bool(subprocess.check_output(["git", "status", "--porcelain"], text=True).strip())
         except (OSError, subprocess.CalledProcessError):
             commit, dirty = "unavailable", None
-        better = [m for m in ("cnn", "mlp") if report["methods"][m]["accuracy"]["mean"] > report["methods"]["rules"]["accuracy"]["mean"]]
+        # Compare on the rules' clips either way, never models-on-all vs rules-on-subset.
+        paired = {m: r.get("on_rules_assessable", r) for m, r in report["methods"].items()}
+        better = [m for m in ("cnn", "mlp") if paired[m]["accuracy"]["mean"] > paired["rules"]["accuracy"]["mean"]]
         conclusion = (f"Higher mean accuracy than rules: {', '.join(better)}. This is not evidence of statistical significance."
                       if better else "Neither neural model beats the rules on mean accuracy in this experiment.")
-        report.update(seeds=args.seeds, epochs=args.epochs, split=args.split, git_commit=commit, git_dirty=dirty,
+        report.update(seeds=args.seeds, epochs=args.epochs, split=args.split, cohort=args.cohort, git_commit=commit, git_dirty=dirty,
                       class_counts=np.bincount(data["y"], minlength=2).tolist(), original_class_counts=data["original_counts"],
                       excluded_rule_unavailable=data["excluded"], clip_names=data["clip_names"].tolist(), labels=data["y"].tolist(),
                       feature_sha256=sha256(args.features), provenance=json.loads(str(data["provenance"])),

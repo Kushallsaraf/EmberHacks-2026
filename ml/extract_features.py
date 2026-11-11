@@ -84,8 +84,22 @@ def extract_clip(path: Path, frames: int) -> tuple[np.ndarray, int, dict]:
         capture.release()
 
 
-def run(clips: Path, manifest: Path, output: Path, frames: int = 32) -> None:
-    """Save features, labels, provenance and skip reasons to a compressed archive."""
+def read_video_rules(path: Path | None, segments: Path) -> dict[str, tuple[int, list[str]]]:
+    """Full-video rule labels from ml.video_rules, refusing results older than the clips."""
+    if path is None or not path.exists():
+        return {}
+    if segments.exists() and path.stat().st_mtime < segments.stat().st_mtime:
+        raise ValueError(f"{path} predates {segments}; rerun python -m ml.video_rules.")
+    with path.open(newline="") as stream:
+        return {row["clip"]: (int(row["label"]), json.loads(row["faults"])) for row in csv.DictReader(stream)}
+
+
+def run(clips: Path, manifest: Path, output: Path, frames: int = 32, video_rules: Path | None = None) -> None:
+    """Save features, labels, provenance and skip reasons to a compressed archive.
+
+    Clips listed in video_rules take their rule label from a continuous pass over
+    the source video (as the app runs); others are assessed as one-rep clips.
+    """
     files = [(p, label) for folder, label in (("good", 0), ("bad", 1))
              for p in sorted((clips / folder).glob("*")) if p.suffix.lower() in VIDEO_SUFFIXES]
     if not files:
@@ -93,6 +107,7 @@ def run(clips: Path, manifest: Path, output: Path, frames: int = 32) -> None:
     if frames < 2:
         raise ValueError("--frames must be >= 2.")
     metadata = read_manifest(manifest)
+    full_video = read_video_rules(video_rules, manifest.with_name("segments.csv"))
     missing = [p.relative_to(clips).as_posix() for p, _ in files if p.relative_to(clips).as_posix() not in metadata]
     if missing:
         raise ValueError(f"Clips missing provenance: {missing}")
@@ -106,6 +121,10 @@ def run(clips: Path, manifest: Path, output: Path, frames: int = 32) -> None:
         hashes.add(digest)
         try:
             features, prediction, info = extract_clip(path, frames)
+            info["rule_source"] = "clip"
+            if name in full_video:
+                prediction, faults = full_video[name]
+                info.update(rule_source="full_video", rule_faults=faults if prediction >= 0 else None)
         except ValueError as error:
             skipped.append({"clip": name, "reason": str(error)})
             LOG.warning("Skipped %s: %s", name, error)
@@ -135,10 +154,12 @@ def main() -> None:
     parser.add_argument("--manifest", type=Path, default=Path("ml/data/manifest.csv"))
     parser.add_argument("--output", type=Path, default=Path("ml/data/features.npz"))
     parser.add_argument("--frames", type=int, default=32)
+    parser.add_argument("--video-rules", type=Path, default=Path("ml/data/video_rules.csv"),
+                        help="Full-video rule labels from ml.video_rules; used when present.")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     try:
-        run(args.clips, args.manifest, args.output, args.frames)
+        run(args.clips, args.manifest, args.output, args.frames, args.video_rules)
     except (ValueError, RuntimeError, ImportError) as error:
         parser.exit(2, f"Extraction stopped: {error}\n")
 

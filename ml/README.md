@@ -2,8 +2,28 @@
 
 This optional CPU experiment compares a small temporal CNN and a summary-statistic
 MLP with Spotter's existing browser squat rules. It is separate from Flask and the
-browser application. Label **0 = good**, **1 = bad**. There are no trained models,
-experiment metrics, or video clips in this repository yet.
+browser application. Label **0 = good**, **1 = bad**. Video clips and trained
+models are not tracked; result files are in `ml/results/`.
+
+## Results (Mendeley squats, front + diagonal, 25 subjects)
+
+Subject-grouped five-fold CV (no person in both train and test), three seeds, 60
+epochs, 1,297 clips with features. On the 567 clips where the app rules complete a
+rep, scoring the same predictions:
+
+| Method | Clips assessed | Accuracy (mean ± SD over seeds) | Bad-class F1 |
+|---|---:|---:|---:|
+| App rules (`movement.js` port) | 43.7% | 0.646 | 0.683 |
+| MLP, trained on all clips | 100% | 0.667 ± 0.012 | 0.659 |
+| CNN, trained on all clips | 100% | 0.641 ± 0.027 | 0.646 |
+
+Over all 1,297 clips the MLP reaches 0.642 ± 0.010 and the CNN 0.620 ± 0.016
+(`ml/results/all_clips/`). Trained and tested only on the 567 rule-assessable clips,
+the MLP scores 0.641 and the CNN 0.593 (`ml/results/`). Either way the gains over the
+rules are small and not significance-tested; the clearer difference is coverage, since
+the models score every clip with features while the rules abstain on 56%. Both models
+fit their training folds to 85–100%, so the limit is generalizing to unseen people
+under weak labels, not capacity. Hyperparameters were not tuned against these folds.
 
 Data may come from licensed public footage or personal recordings. Each clip needs
 a documented source and label. Synthetic arrays in `tests/ml/` are test fixtures
@@ -19,13 +39,67 @@ Attribution: Duddela Sai Prashanth, Priya Kamath, Rakshith Bhandary, S Ashlesh P
 Pratham PN, Advith P, and Abhishek Mashetty (2026). See the original record for
 the license and download. No paid API, account subscription, or cloud GPU is needed.
 
-This is a candidate source, not an already evaluated dataset: footage has not been
-downloaded, inspected, segmented, or run through this experiment. The record does
-not establish that every file contains exactly one repetition or that every bad
-label identifies shallow depth, inward knee movement, or excessive forward lean.
-Review those before use.
+What the squat footage actually contains (inspected 2026-11): 150 videos, one per
+subject (001–024, 026) × good/bad × front/side/diagonal; 15 fps, ~30 s, with
+~10–20 back-to-back repetitions each. Labels are per video and do not name the
+fault; spot checks show shallow depth in some bad videos. Faces and often torsos
+are covered by privacy blur boxes. Front and diagonal videos of the same subject
+appear to be simultaneous recordings of the same reps.
 
-Preparation:
+The provider archive has five pairs of byte-identical squat videos: subject 003
+diagonal and subject 023 side are each filed as both good and bad; subject 005/006
+side (good and bad) and subject 026 bad side / subject 015 good side are shared
+between subjects. No re-encoded near-duplicates were found. `segment_reps.py`
+excludes every copy, which removes subject 003's diagonal pair from front + diagonal.
+
+Pose coverage differs by view. Front/diagonal frames mostly pass the both-sides
+visibility filter in `features.py`; side-view frames almost never do (the far leg is
+occluded), so side view needs one-sided features and is not used yet.
+
+### Automated preparation (front + diagonal)
+
+Fetch only the squat videos (~0.5 GB) from the 3.1 GB archive with HTTP range
+requests:
+
+```bash
+.venv-ml/bin/python -m ml.download_dataset
+```
+
+Split each video into one-repetition clips and write `ml/data/manifest.csv`:
+
+```bash
+.venv-ml/bin/python -m ml.segment_reps
+```
+
+`segment_reps.py` finds reps from hip height above the ankles, cuts at the middle of
+the standing interval between bottoms, and drops reps with under 35% measured
+frames. It replaces only its own `mendeley_*` clips and manifest rows, and writes
+each clip's source frame range to ignored `ml/data/segments.csv`. With duplicates
+excluded this gives 1,319 clips (good 634 / bad 685) from 98 videos.
+
+Run the app rules over each whole source video, as the browser does during a set:
+
+```bash
+.venv-ml/bin/python -m ml.video_rules
+```
+
+The browser tracker calibrates once and stays armed between reps, so a one-rep clip
+cut from a continuous set has no fresh standing hold; assessing clips separately
+left only 13.5% assessable. `video_rules.py` streams each source video through
+`SquatRules(target_reps=100)` with extraction's MediaPipe settings and assigns each
+completed rule rep to the clip covering at least half of it. This assessed 568 of
+1,319 clips (43%); the rest fall in tracking dropouts, which reset the app's
+calibration too. `ml.extract_features` uses `ml/data/video_rules.csv` when present
+(refusing it if older than `segments.csv`) and per-clip rules for other clips, and
+records `rule_source` in provenance.
+
+Limitations of this preparation: every rep inherits its video's label (weak labels;
+a bad video can contain acceptable reps), labels are not independently reviewed,
+and both views of one performance count as separate clips. Subject-grouped CV keeps
+all of a subject's clips in one fold, so this does not leak across folds, but the
+clip count overstates independent observations.
+
+### Manual preparation (other sources)
 
 1. Download just one of the source's folder organizations: the publisher says all
    three contain identical videos. Keep originals under ignored `ml/data/downloads/`.
@@ -109,10 +183,19 @@ After adding real clips and the manifest, extract landmarks and features:
 ```
 
 Train/evaluate both models and the rules on the same folds, then save inference
-models fitted on the full evaluated cohort:
+models fitted on the full evaluated cohort. The default cohort keeps only clips the
+rules assess, for every method:
 
 ```bash
 .venv-ml/bin/python -m ml.train_form_classifier --seeds 17 42 123 --epochs 60
+```
+
+`--cohort all` trains and scores the models on every clip, scores the rules only
+where they complete a rep (with coverage), and also scores the models on those same
+clips for the comparison:
+
+```bash
+.venv-ml/bin/python -m ml.train_form_classifier --cohort all --results ml/results/all_clips --model-dir ml/models/all_clips
 ```
 
 Predict a separate uniformly sampled landmark sequence saved as a NumPy array:
@@ -181,8 +264,10 @@ repository commit `ad5176d`:
 - Image framing gate: `app/static/js/calibration.js`, lines 37–79.
 
 The Python port runs on **raw world landmarks and original timing**, retaining
-the complete one-repetition state machine. Hand-built cases are passed to both
-Python and the unchanged JavaScript module, including missing/degenerate frames.
+the complete state machine for one rep (`SquatRules()`) or a continuous set
+(`SquatRules(target_reps=n)`: completion keeps the calibration armed; any dropout
+forces a full re-arm). Hand-built cases are passed to both Python and the unchanged
+JavaScript module, including missing/degenerate frames and back-to-back sets.
 These test fixtures are never training/evaluation data.
 
 The rules have no knee-valgus or torso-lean criterion. No threshold is invented for
@@ -242,5 +327,7 @@ Clip stratification cannot fix subject leakage. A single frame angle is not a
 clinical form assessment; the baseline itself is a demo heuristic. No clinical,
 injury-prevention, or universal coaching claim is supported.
 
-Real-video evaluation is pending. Test-suite results verify implementation behavior,
-not squat-form classification accuracy.
+The reported results use weak, provider-level labels that were not independently
+reviewed, a single public dataset recorded in a few gyms, and front/diagonal views
+that likely duplicate each performance. Test-suite results verify implementation
+behavior, not squat-form classification accuracy.

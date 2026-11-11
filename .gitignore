@@ -14,6 +14,8 @@ test-results/
 .venv-ml/
 ml/data/clips/
 ml/data/*.npz
+ml/data/segments.csv
+ml/data/video_rules.csv
 ml/data/downloads/
 ml/models/
 ml/**/*.pt

@@ -55,3 +55,38 @@ def test_js_parity(case):
         assert "shallow_depth" in actual["faults"]
     if case == "uneven":
         assert "uneven_range" in actual["faults"]
+
+
+def run_set(frames, target_reps=100):
+    tracker = SquatRules(target_reps)
+    for frame in frames:
+        tracker.update(None if frame["image"] is None else np.array(frame["image"]),
+                       np.array(frame["world"]), frame["time"])
+    oracle = Path(__file__).with_name("baseline_oracle.mjs")
+    expected = json.loads(subprocess.check_output(
+        ["node", str(oracle)], input=json.dumps({"frames": frames, "targetReps": target_reps}), text=True))
+    actual = [{**r, "start_ms": round(r["start_ms"], 1), "end_ms": round(r["end_ms"], 1)} for r in tracker.reps]
+    return actual, expected
+
+
+@pytest.mark.parametrize("case", ["back_to_back", "dropout", "shallow_then_good", "target"])
+def test_js_parity_continuous_set(case):
+    if not shutil.which("node"):
+        pytest.fail("Node >=20 is required to verify parity with the real JavaScript rules.")
+    # One standing hold, then reps without a fresh hold between them.
+    reps = [make_frames(), make_frames(bottom=128 if case == "shallow_then_good" else 90), make_frames()]
+    frames = reps[0] + [f for r in reps[1:] for f in r[5:]]
+    for i, frame in enumerate(frames):
+        frame["time"] = i * 100
+    if case == "dropout":
+        frames[30]["image"] = None
+    actual, expected = run_set(frames, 2 if case == "target" else 100)
+    assert actual == expected
+    if case == "back_to_back":
+        assert len(actual) == 3 and all(r["label"] == 0 for r in actual)
+    if case == "dropout":
+        assert len(actual) < 3
+    if case == "shallow_then_good":
+        assert [r["label"] for r in actual] == [0, 1, 0]
+    if case == "target":
+        assert len(actual) == 2
